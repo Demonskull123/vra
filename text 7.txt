@@ -1,0 +1,1210 @@
+local Airflow = loadstring(game:HttpGet("https://raw.githubusercontent.com/Twistzzmassivescripts/UI_Libarys/refs/heads/main/OUTLAWS.dev/NEW%20ONE%20PEAK.lua"))()
+Airflow:LoadFont({ Name = "ValleySans" })
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UIS = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Http = game:GetService("HttpService")
+local VIM = game:GetService("VirtualInputManager")
+
+local lp = Players.LocalPlayer
+local BALL = "TPS"
+local MAX = 4
+local SCALE = 0.45
+
+local reach = 1
+local enabled = false
+local hitboxAlpha = 1
+local balls = {}
+local sizeWatch = {}
+
+local POPUP_LIFE = 0.8
+local diving = false
+local heldKeys = {}
+local pcEnabled = false
+local mobEnabled = false
+local pcHeld = {}
+
+local SAVE_DIR = "GKManual"
+local SAVE_FILE = SAVE_DIR .. "/layout.json"
+local canSave = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+if canSave and type(makefolder) == "function" and type(isfolder) == "function" and not isfolder(SAVE_DIR) then
+    pcall(makefolder, SAVE_DIR)
+end
+
+local CFG = {
+    RawKeys = true,
+    SignalKeys = true,
+    DoubleTap = true,
+    MaxHold = 2.2,
+    HoldAfter = 0.20,
+    CatchAnchorTime = 0.35,
+    JumpHold = 0.06,
+    JumpLead = 0.10,
+}
+
+local PCKeys = {
+    LowLeft = Enum.KeyCode.Q, LowCentre = Enum.KeyCode.F, LowRight = Enum.KeyCode.E,
+    MidLeft = Enum.KeyCode.A, MidCentre = Enum.KeyCode.S, MidRight = Enum.KeyCode.D,
+    SupLeft = Enum.KeyCode.Z, SupCentre = Enum.KeyCode.X, SupRight = Enum.KeyCode.C,
+}
+
+local VK = {
+    [Enum.KeyCode.Q]=0x51,[Enum.KeyCode.W]=0x57,[Enum.KeyCode.E]=0x45,[Enum.KeyCode.R]=0x52,
+    [Enum.KeyCode.T]=0x54,[Enum.KeyCode.Y]=0x59,[Enum.KeyCode.U]=0x55,[Enum.KeyCode.I]=0x49,
+    [Enum.KeyCode.O]=0x4F,[Enum.KeyCode.P]=0x50,[Enum.KeyCode.A]=0x41,[Enum.KeyCode.S]=0x53,
+    [Enum.KeyCode.D]=0x44,[Enum.KeyCode.F]=0x46,[Enum.KeyCode.G]=0x47,[Enum.KeyCode.H]=0x48,
+    [Enum.KeyCode.J]=0x4A,[Enum.KeyCode.K]=0x4B,[Enum.KeyCode.L]=0x4C,[Enum.KeyCode.Z]=0x5A,
+    [Enum.KeyCode.X]=0x58,[Enum.KeyCode.C]=0x43,[Enum.KeyCode.V]=0x56,[Enum.KeyCode.B]=0x42,
+    [Enum.KeyCode.N]=0x4E,[Enum.KeyCode.M]=0x4D,[Enum.KeyCode.Space]=0x20,
+    [Enum.KeyCode.LeftShift]=0xA0,[Enum.KeyCode.RightShift]=0xA1,
+    [Enum.KeyCode.LeftControl]=0xA2,[Enum.KeyCode.RightControl]=0xA3,
+    [Enum.KeyCode.LeftAlt]=0xA4,[Enum.KeyCode.RightAlt]=0xA5,
+    [Enum.KeyCode.Tab]=0x09,[Enum.KeyCode.Return]=0x0D,
+    [Enum.KeyCode.Backspace]=0x08,[Enum.KeyCode.Escape]=0x1B,
+}
+
+local K = {
+    HIGH = Enum.KeyCode.E, HCAT = Enum.KeyCode.Z,
+    LOW = Enum.KeyCode.Q, LCAT = Enum.KeyCode.Z,
+    LEFT = Enum.KeyCode.A, RIGHT = Enum.KeyCode.D,
+    JUMP = Enum.KeyCode.Space,
+}
+
+local BLOCKED = { [Enum.KeyCode.W] = true, [Enum.KeyCode.S] = true }
+local PRESSABLE = { K.HIGH, K.HCAT, K.LOW, K.LCAT, K.LEFT, K.RIGHT, K.JUMP }
+local CLEAN = { Enum.KeyCode.W, Enum.KeyCode.S }
+local CLEAN_VK = { [Enum.KeyCode.W] = 0x57, [Enum.KeyCode.S] = 0x53 }
+
+local Window = Airflow:CreateWindow({
+    Name = "Outlaw",
+    LoadingSubtitle = "Outlaw.dev",
+    ToggleUIKeybind = "RightControl",
+    ConfigurationSaving = { Enabled = true, FolderName = "Outlaw", FileName = "default" },
+    Home = {
+        Name = "Home",
+        Stats = { "FPS", "Ping", "Executor", "Game", "Region", "Time" },
+    },
+})
+
+local Main = Window:CreateTab("Main")
+local MobTab = Window:CreateTab("Dive Macro Mobile")
+local PCTab = Window:CreateTab("Dive Macro PC")
+local Helpers = Window:CreateTab("Helpers")
+local PlayerTab = Window:CreateTab("Player")
+local MiscTab = Window:CreateTab("Misc")
+
+local function snapshot(part)
+    return {
+        Size = part.Size, Transparency = part.Transparency, CanCollide = part.CanCollide,
+        Material = part.Material, Color = part.Color, Reflectance = part.Reflectance,
+    }
+end
+
+local function untrack(part)
+    local rec = balls[part]
+    if not rec then return end
+    if rec.conn then rec.conn:Disconnect() end
+    if rec.fake then rec.fake:Destroy() end
+    balls[part] = nil
+    sizeWatch[part] = nil
+end
+
+local function track(part)
+    if not part:IsA("BasePart") or balls[part] then return end
+    local rec = { base = nil, conn = nil, fake = nil, locked = false }
+    rec.conn = part.AncestryChanged:Connect(function(_, parent)
+        if not parent then untrack(part) end
+    end)
+    balls[part] = rec
+end
+
+local function forceRecapture(part)
+    local rec = balls[part]
+    if not rec then return end
+    rec.base = nil
+    rec.locked = false
+    if rec.fake then rec.fake:Destroy() rec.fake = nil end
+end
+
+local function ensureBase(part, rec)
+    local liveSize = part.Size
+
+    local valid = liveSize.X > 0.5 and liveSize.Y > 0.5 and liveSize.Z > 0.5
+    if not valid then
+        rec.locked = false
+        rec.base = nil
+        if rec.fake then rec.fake:Destroy() rec.fake = nil end
+        return
+    end
+
+    if not rec.base or not rec.locked then
+        rec.base = snapshot(part)
+        rec.locked = true
+        if rec.fake then rec.fake:Destroy() rec.fake = nil end
+    end
+
+    if not rec.fake and rec.base then
+        local prev = part.Archivable
+        part.Archivable = true
+        local fake = part:Clone()
+        part.Archivable = prev
+        if not fake then return end
+
+        for _, v in ipairs(fake:GetDescendants()) do
+            if v:IsA("LuaSourceContainer") or v:IsA("BodyMover") or v:IsA("Constraint")
+            or v:IsA("JointInstance") or v:IsA("TouchTransmitter") then
+                v:Destroy()
+            end
+        end
+
+        fake.Name = "VisualFake_" .. part.Name
+        fake.Anchored = true
+        fake.CanCollide = false
+        fake.Massless = true
+        pcall(function() fake.CanQuery = false end)
+        pcall(function() fake.CanTouch = false end)
+        fake.Size = rec.base.Size
+        fake.Transparency = rec.base.Transparency
+        fake.Material = rec.base.Material
+        fake.Color = rec.base.Color
+        if rec.base.Reflectance then fake.Reflectance = rec.base.Reflectance end
+
+        rec.fake = fake
+        fake.Parent = part.Parent
+    end
+end
+
+local function restore(part, rec)
+    if not rec.base then return end
+    part.Size = rec.base.Size
+    part.Transparency = rec.base.Transparency
+    part.CanCollide = rec.base.CanCollide
+    part.Material = rec.base.Material
+    if rec.fake then rec.fake:Destroy() rec.fake = nil end
+    rec.base = nil
+    rec.locked = false
+end
+
+Workspace.DescendantAdded:Connect(function(obj)
+    if obj.Name == BALL then
+        task.defer(function()
+            if obj and obj.Parent then track(obj) end
+            task.wait(0.1)
+            if obj and obj.Parent then forceRecapture(obj) end
+        end)
+    end
+end)
+
+Workspace.DescendantRemoving:Connect(function(obj)
+    if obj.Name == BALL then
+        untrack(obj)
+    end
+end)
+
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    if obj.Name == BALL then track(obj) end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == BALL and obj:IsA("BasePart") then
+                local rec = balls[obj]
+                if rec and rec.base and rec.locked then
+                    local live = obj.Size
+                    local expected = rec.base.Size * (reach < 1 and 1 or reach)
+                    local last = sizeWatch[obj]
+                    if last and math.abs(live.Magnitude - last) > 0.05 then
+                        local drift = (live - expected).Magnitude
+                        if drift > 0.25 then
+                            forceRecapture(obj)
+                        end
+                    end
+                    sizeWatch[obj] = live.Magnitude
+                elseif rec then
+                    sizeWatch[obj] = obj.Size.Magnitude
+                end
+            end
+        end
+    end
+end)
+
+Main:CreateSection("Ball Reach")
+
+Main:CreateSlider({
+    Name = "Reach Multiplier",
+    Range = {0, MAX}, Increment = 0.1, Suffix = "x",
+    CurrentValue = reach / SCALE, Flag = "ReachSlider",
+    Callback = function(v) reach = v * SCALE end,
+})
+
+Main:CreateSlider({
+    Name = "Hitbox Visibility (0 = full size visual)",
+    Range = {0, 1}, Increment = 0.05, Suffix = "",
+    CurrentValue = 1, Flag = "HitboxAlphaSlider",
+    Callback = function(v) hitboxAlpha = v end,
+})
+
+Main:CreateToggle({
+    Name = "Enable Expander", CurrentValue = false, Flag = "EnableToggle",
+    Callback = function(v)
+        enabled = v
+        if not v then
+            for part, rec in pairs(balls) do
+                if part.Parent then restore(part, rec) end
+            end
+        else
+            for part in pairs(balls) do
+                forceRecapture(part)
+            end
+        end
+    end,
+})
+
+Main:CreateButton({
+    Name = "Reset Balls",
+    Callback = function()
+        for part, rec in pairs(balls) do
+            if part.Parent then restore(part, rec) end
+        end
+    end,
+})
+
+RunService.Heartbeat:Connect(function()
+    if not enabled then return end
+    local mult = reach < 1 and 1 or reach
+    local visT = hitboxAlpha
+
+    for part, rec in pairs(balls) do
+        if part.Parent then
+            ensureBase(part, rec)
+
+            if rec.base then
+                local size = rec.base.Size * mult
+                if part.Size ~= size then part.Size = size end
+                if part.Transparency ~= visT then part.Transparency = visT end
+                if part.CanCollide then part.CanCollide = false end
+
+                if rec.fake then
+                    rec.fake.CFrame = part.CFrame
+                    local fakeT = hitboxAlpha > 0 and rec.base.Transparency or 1
+                    if rec.fake.Transparency ~= fakeT then rec.fake.Transparency = fakeT end
+                    if rec.fake.Parent ~= part.Parent then rec.fake.Parent = part.Parent end
+                end
+            end
+        end
+    end
+end)
+
+local V3 = Vector3.new
+local V3zero = Vector3.zero
+
+local function getRoot(char) return char and char:FindFirstChild("HumanoidRootPart") end
+
+local function getBall()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name == BALL and obj:IsA("BasePart") then return obj end
+    end
+end
+
+Helpers:CreateSection("Air Dribble")
+
+local air = { on = false, radius = 13, height = 1.7, strength = 35, damping = 0.5, conn = nil, bv = nil }
+
+local function stopAir()
+    if air.conn then air.conn:Disconnect() air.conn = nil end
+    if air.bv then air.bv:Destroy() air.bv = nil end
+end
+
+local function startAir()
+    stopAir()
+    if not air.on then return end
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = V3(0, 9e9, 0)
+    bv.Velocity = V3zero
+    air.bv = bv
+    air.conn = RunService.Heartbeat:Connect(function()
+        local root = getRoot(lp.Character)
+        local ball = getBall()
+        if not (root and ball and air.bv) then return end
+        if (root.Position - ball.Position).Magnitude <= air.radius then
+            if air.bv.Parent ~= root then air.bv.Parent = root end
+            local targetY = ball.Position.Y + air.height
+            local newY = (targetY - root.Position.Y) * air.strength - root.AssemblyLinearVelocity.Y * air.damping
+            air.bv.Velocity = V3(0, newY, 0)
+        else
+            air.bv.Velocity = V3zero
+            air.bv.Parent = nil
+        end
+    end)
+end
+
+Helpers:CreateToggle({
+    Name = "Enable Air Dribble Helper", CurrentValue = false, Flag = "AirDribbleToggle",
+    Callback = function(v)
+        air.on = v
+        if v then startAir() else stopAir() end
+    end,
+})
+
+Helpers:CreateInput({
+    Name = "Air Dribble Radius", PlaceholderText = "Input size",
+    Callback = function(v) air.radius = tonumber(v) or air.radius end,
+})
+
+Helpers:CreateButton({
+    Name = "ZZZZ Helper",
+    Callback = function()
+        air.radius = 13
+        air.height = 1.7
+        air.strength = 35
+        air.damping = 0.5
+        air.on = true
+        startAir()
+    end,
+})
+
+Helpers:CreateToggle({
+    Name = "Infinite Head Helper", CurrentValue = false, Flag = "InfiniteHeadToggle",
+    Callback = function(v)
+        local ball = getBall()
+        if ball and ball:IsA("BasePart") then ball.CanCollide = not v end
+    end,
+})
+
+local infDrib = { follow = false, gui = nil }
+
+local function setInfGui(value)
+    if not value then
+        infDrib.follow = false
+        if infDrib.gui then infDrib.gui:Destroy() infDrib.gui = nil end
+        return
+    end
+    local pg = lp:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "OutlawInfDribbleGui"
+    gui.ResetOnSpawn = false
+    gui.Parent = pg
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.fromOffset(120, 40)
+    btn.Position = UDim2.new(0, 20, 0.5, -20)
+    btn.Text = "Inf Dribble: OFF"
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.TextScaled = true
+    btn.Parent = gui
+
+    btn.MouseButton1Click:Connect(function()
+        infDrib.follow = not infDrib.follow
+        btn.Text = infDrib.follow and "Inf Dribble: ON" or "Inf Dribble: OFF"
+    end)
+
+    infDrib.gui = gui
+end
+
+RunService.Heartbeat:Connect(function()
+    if not infDrib.follow then return end
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local ball = getBall()
+    if hum and hum.Parent and hum.Health > 0 and ball then
+        pcall(function() hum:MoveTo(ball.Position + Vector3.new(0, 0, 2)) end)
+    end
+end)
+
+Helpers:CreateToggle({
+    Name = "Inf Dribble Helper [MOB]", CurrentValue = false, Flag = "InfDribbleToggle",
+    Callback = function(v) setInfGui(v) end,
+})
+
+local function getHum(char) return char and char:FindFirstChildOfClass("Humanoid") end
+local function myHum() return getHum(lp.Character) end
+
+local P = {
+    gravOn = false, grav = Workspace.Gravity,
+    infJump = false, autoJump = false,
+    speedOn = false, speed = 23,
+    disguise = false, user = "", desc = nil,
+}
+
+PlayerTab:CreateSection("Gravity")
+PlayerTab:CreateToggle({
+    Name = "Enable Custom Gravity", CurrentValue = false, Flag = "CustomGravityToggle",
+    Callback = function(v)
+        P.gravOn = v
+        Workspace.Gravity = v and P.grav or 196.2
+    end,
+})
+PlayerTab:CreateSlider({
+    Name = "Gravity Strength", Range = {50, 300}, Increment = 1,
+    CurrentValue = math.floor(P.grav), Flag = "GravityStrength",
+    Callback = function(v)
+        P.grav = v
+        if P.gravOn then Workspace.Gravity = v end
+    end,
+})
+PlayerTab:CreateToggle({
+    Name = "Infinite Jump", CurrentValue = false, Flag = "InfJumpToggle",
+    Callback = function(v) P.infJump = v end,
+})
+UIS.JumpRequest:Connect(function()
+    if not P.infJump then return end
+    local h = myHum()
+    if h and h.Parent and h.Health > 0 then
+        pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
+end)
+PlayerTab:CreateToggle({
+    Name = "Auto Jump (BHop)", CurrentValue = false, Flag = "AutoJumpToggle",
+    Callback = function(v) P.autoJump = v end,
+})
+RunService.Heartbeat:Connect(function()
+    if not P.autoJump then return end
+    local h = myHum()
+    if h and h.Parent and h.Health > 0 and h.FloorMaterial ~= Enum.Material.Air then
+        pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
+end)
+
+PlayerTab:CreateSection("Walkspeed")
+PlayerTab:CreateToggle({
+    Name = "Enable Walkspeed", CurrentValue = false, Flag = "WalkspeedToggle",
+    Callback = function(v)
+        P.speedOn = v
+        local h = myHum()
+        if h and h.Parent then h.WalkSpeed = v and P.speed or 23 end
+    end,
+})
+PlayerTab:CreateSlider({
+    Name = "Walkspeed Size", Range = {23, 75}, Increment = 1,
+    CurrentValue = 23, Flag = "WalkspeedSlider",
+    Callback = function(v)
+        P.speed = v
+        if P.speedOn then
+            local h = myHum()
+            if h and h.Parent then h.WalkSpeed = v end
+        end
+    end,
+})
+
+PlayerTab:CreateSection("Avatar Stolen")
+PlayerTab:CreateToggle({
+    Name = "Enable Avatar Stolen", CurrentValue = false, Flag = "AvatarStolenToggle",
+    Callback = function(v)
+        P.disguise = v
+        local char = lp.Character
+        local hum = getHum(char)
+        if v and char and P.user ~= "" then
+            task.spawn(function()
+                local ok, uid = pcall(function() return Players:GetUserIdFromNameAsync(P.user) end)
+                if not ok then return end
+                local ok2, desc = pcall(function() return Players:GetHumanoidDescriptionFromUserId(uid) end)
+                if ok2 and desc then
+                    P.desc = desc
+                    local h = getHum(lp.Character)
+                    if h and h.Parent then
+                        pcall(function() h:ApplyDescriptionClientServer(desc) end)
+                    end
+                end
+            end)
+        elseif not v and hum and hum.Parent then
+            pcall(function()
+                hum:ApplyDescriptionClientServer(Players:GetHumanoidDescriptionAsync(lp.UserId))
+            end)
+        end
+    end,
+})
+PlayerTab:CreateInput({
+    Name = "Avatar Username", PlaceholderText = "Enter username",
+    Callback = function(v) P.user = v end,
+})
+lp.CharacterAdded:Connect(function(char)
+    task.defer(function()
+        local h = getHum(char)
+        if not h or not h.Parent then return end
+        if P.speedOn then h.WalkSpeed = P.speed end
+        if P.disguise and P.desc then
+            pcall(function() h:ApplyDescriptionClientServer(P.desc) end)
+        end
+    end)
+end)
+
+local function press(kc, down)
+    if BLOCKED[kc] then return end
+    pcall(function() VIM:SendKeyEvent(down, kc, false, game) end)
+    if CFG.RawKeys and VK[kc] then
+        pcall(function()
+            local fn = down and keypress or keyrelease
+            if fn then fn(VK[kc]) end
+        end)
+    end
+    if CFG.SignalKeys and typeof(getconnections) == "function" then
+        pcall(function()
+            local fake = {
+                KeyCode = kc,
+                UserInputType = Enum.UserInputType.Keyboard,
+                UserInputState = down and Enum.UserInputState.Begin or Enum.UserInputState.End,
+            }
+            local sig = down and UIS.InputBegan or UIS.InputEnded
+            for _, c in ipairs(getconnections(sig)) do
+                pcall(function() c:Fire(fake, false) end)
+            end
+        end)
+    end
+end
+
+local function tap(kc) press(kc, true) press(kc, false) end
+
+local function jumpOnce()
+    press(K.JUMP, true)
+    pcall(function()
+        local h = myHum()
+        if h and h.Parent and h.Health > 0 then
+            h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+            h:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+            h.Jump = true
+            h:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+    task.wait(CFG.JumpHold)
+    press(K.JUMP, false)
+    task.wait(CFG.JumpLead)
+end
+
+local function hold(kc)
+    heldKeys[kc] = os.clock() + CFG.MaxHold
+    press(kc, true)
+end
+
+local function releaseAll()
+    for kc in pairs(heldKeys) do heldKeys[kc] = nil end
+    for _, kc in ipairs(PRESSABLE) do press(kc, false) end
+    for _, kc in ipairs(CLEAN) do
+        pcall(function() VIM:SendKeyEvent(false, kc, false, game) end)
+        if keyrelease and CLEAN_VK[kc] then pcall(function() keyrelease(CLEAN_VK[kc]) end) end
+    end
+    local h = myHum()
+    if h and h.Parent and h.Health > 0 then
+        pcall(function() h:Move(Vector3.zero, false) end)
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        local now = os.clock()
+        for kc, deadline in pairs(heldKeys) do
+            if now >= deadline then
+                heldKeys[kc] = nil
+                press(kc, false)
+            end
+        end
+    end
+end)
+
+local function camRight()
+    local root = getRoot(lp.Character)
+    if not root then return Vector3.new(1, 0, 0) end
+    local cam = workspace.CurrentCamera
+    local r = (cam and cam.CFrame or root.CFrame).RightVector
+    local flat = Vector3.new(r.X, 0, r.Z)
+    if flat.Magnitude < 0.05 then
+        r = root.CFrame.RightVector
+        flat = Vector3.new(r.X, 0, r.Z)
+    end
+    if flat.Magnitude < 0.05 then return Vector3.new(1, 0, 0) end
+    return flat.Unit
+end
+
+local function anchorBrief(duration)
+    local root = getRoot(lp.Character)
+    if not root or not root.Parent then return end
+    for _, c in ipairs(root:GetChildren()) do
+        if c.Name == "OutlawCounter" then c:Destroy() end
+    end
+    local prev = root.Anchored
+    root.Anchored = true
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "OutlawCounter"
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bv.P = 1250
+    bv.Velocity = Vector3.zero
+    bv.Parent = root
+    task.delay(duration, function()
+        if root and root.Parent then
+            root.Anchored = prev
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+        if bv and bv.Parent then bv:Destroy() end
+    end)
+end
+
+local function dive(sideSign, band)
+    if not pcEnabled and not mobEnabled then return end
+    if diving then return end
+    diving = true
+
+    local hum = myHum()
+    if not hum or not hum.Parent or hum.Health <= 0 then
+        diving = false
+        return
+    end
+
+    local isHigh = band == "MID" or band == "SUPER"
+    local diveKey = isHigh and K.HIGH or K.LOW
+    local catchKey = isHigh and K.HCAT or K.LCAT
+    local isSuper = band == "SUPER"
+
+    local sideKey = nil
+    if sideSign > 0 then sideKey = K.RIGHT
+    elseif sideSign < 0 then sideKey = K.LEFT end
+
+    local moveVec = nil
+    if sideSign ~= 0 then
+        moveVec = camRight() * sideSign
+        pcall(function() hum:Move(moveVec, false) end)
+    end
+    if sideKey then hold(sideKey) end
+
+    task.spawn(function()
+        local caught = false
+        local conn = nil
+
+        local ok, err = pcall(function()
+            if isSuper then
+                jumpOnce()
+                if not hum.Parent or hum.Health <= 0 then return end
+            end
+
+            conn = hum.Touched:Connect(function(hit)
+                if caught then return end
+                if hit and hit.Name == BALL then
+                    caught = true
+                    pcall(function() hum:Move(Vector3.zero, false) end)
+                    anchorBrief(CFG.CatchAnchorTime)
+                end
+            end)
+
+            tap(diveKey)
+            if CFG.DoubleTap then
+                tap(catchKey)
+                tap(diveKey)
+                tap(catchKey)
+            end
+
+            local t0 = os.clock()
+            while os.clock() - t0 < CFG.HoldAfter do
+                if caught then break end
+                if not hum.Parent or hum.Health <= 0 then break end
+                if moveVec then pcall(function() hum:Move(moveVec, false) end) end
+                task.wait(0.02)
+            end
+        end)
+
+        if conn then conn:Disconnect() end
+        if not ok then warn("[Outlaw] dive: " .. tostring(err)) end
+
+        pcall(function()
+            local h = getRoot(lp.Character)
+            if h and h.Parent and not h.Anchored then
+                h.AssemblyLinearVelocity = Vector3.zero
+                h.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+        pcall(releaseAll)
+        diving = false
+    end)
+end
+
+local btnCfg = { Locked = false, Size = 56, Opacity = 0.85, Visible = false }
+local BTN_DEFS = {
+    { id="lowL", label="L\nQ", band="LOW",   side=-1, px=0.02, py=0.55 },
+    { id="lowC", label="C\nQ", band="LOW",   side= 0, px=0.11, py=0.55 },
+    { id="lowR", label="R\nQ", band="LOW",   side= 1, px=0.20, py=0.55 },
+    { id="midL", label="L\nE", band="MID",   side=-1, px=0.02, py=0.70 },
+    { id="midC", label="C\nE", band="MID",   side= 0, px=0.11, py=0.70 },
+    { id="midR", label="R\nE", band="MID",   side= 1, px=0.20, py=0.70 },
+    { id="supL", label="L\nJ", band="SUPER", side=-1, px=0.02, py=0.85 },
+    { id="supC", label="C\nJ", band="SUPER", side= 0, px=0.11, py=0.85 },
+    { id="supR", label="R\nJ", band="SUPER", side= 1, px=0.20, py=0.85 },
+}
+
+local btnSizes, btnPos, btnRefs = {}, {}, {}
+
+local function keyName(kc) return kc and kc.Name or "None" end
+
+local function nameKey(nm)
+    if not nm or nm == "None" then return nil end
+    local ok, kc = pcall(function() return Enum.KeyCode[nm] end)
+    return ok and kc or nil
+end
+
+local function buildPayload()
+    local posOut = {}
+    for id, ud in pairs(btnPos) do
+        posOut[id] = { xs = ud.X.Scale, xo = ud.X.Offset, ys = ud.Y.Scale, yo = ud.Y.Offset }
+    end
+    local keysOut = {}
+    for slot, kc in pairs(PCKeys) do keysOut[slot] = keyName(kc) end
+    return {
+        v = 2,
+        sizes = btnSizes,
+        positions = posOut,
+        cfg = { size = btnCfg.Size, opacity = btnCfg.Opacity, locked = btnCfg.Locked },
+        pckeys = keysOut,
+    }
+end
+
+local function applyPayload(data)
+    if type(data) ~= "table" then return false end
+    if type(data.sizes) == "table" then
+        for k, v in pairs(data.sizes) do
+            if type(v) == "number" then btnSizes[k] = v end
+        end
+    end
+    if type(data.positions) == "table" then
+        for k, v in pairs(data.positions) do
+            if type(v) == "table" and v.xs and v.xo and v.ys and v.yo then
+                btnPos[k] = UDim2.new(v.xs, v.xo, v.ys, v.yo)
+            end
+        end
+    end
+    if type(data.cfg) == "table" then
+        if type(data.cfg.size) == "number" then btnCfg.Size = data.cfg.size end
+        if type(data.cfg.opacity) == "number" then btnCfg.Opacity = data.cfg.opacity end
+        if type(data.cfg.locked) == "boolean" then btnCfg.Locked = data.cfg.locked end
+    end
+    if type(data.pckeys) == "table" then
+        for slot, nm in pairs(data.pckeys) do
+            local kc = nameKey(nm)
+            if kc then PCKeys[slot] = kc end
+        end
+    end
+    return true
+end
+
+local function saveLayout()
+    if not canSave then return end
+    pcall(function() writefile(SAVE_FILE, Http:JSONEncode(buildPayload())) end)
+end
+
+local function loadLayout()
+    if not canSave then return end
+    local exists = false
+    pcall(function() exists = isfile(SAVE_FILE) end)
+    if not exists then return end
+    local data
+    local ok = pcall(function() data = Http:JSONDecode(readfile(SAVE_FILE)) end)
+    if ok then applyPayload(data) end
+end
+
+loadLayout()
+pcEnabled = false
+mobEnabled = false
+
+local guiRoot = CoreGui
+do
+    local ok, hui = pcall(gethui)
+    if ok and hui then guiRoot = hui end
+end
+
+local old = guiRoot:FindFirstChild("GKMobileButtons")
+if old then old:Destroy() end
+
+local btnGui = Instance.new("ScreenGui")
+btnGui.Name = "GKMobileButtons"
+btnGui.ResetOnSpawn = false
+btnGui.DisplayOrder = 999998
+btnGui.IgnoreGuiInset = true
+btnGui.Enabled = false
+btnGui.Parent = guiRoot
+
+local function syncSizes()
+    for id, ref in pairs(btnRefs) do
+        local s = btnSizes[id] or btnCfg.Size
+        ref.btn.Size = UDim2.new(0, s, 0, s)
+    end
+end
+
+local function syncOpacity()
+    for _, ref in pairs(btnRefs) do
+        ref.btn.BackgroundTransparency = 1 - btnCfg.Opacity
+    end
+end
+
+local function syncLock()
+    for _, ref in pairs(btnRefs) do
+        ref.stroke.Color = btnCfg.Locked and Color3.fromRGB(0, 255, 130) or Color3.fromRGB(255, 200, 60)
+    end
+end
+
+for _, def in ipairs(BTN_DEFS) do
+    local sz = btnSizes[def.id] or btnCfg.Size
+    local pos = btnPos[def.id] or UDim2.new(def.px, 0, def.py, 0)
+    btnSizes[def.id] = sz
+    btnPos[def.id] = pos
+
+    local btn = Instance.new("TextButton")
+    btn.Name = def.id
+    btn.Size = UDim2.new(0, sz, 0, sz)
+    btn.Position = pos
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+    btn.BackgroundTransparency = 1 - btnCfg.Opacity
+    btn.TextColor3 = Color3.fromRGB(0, 255, 130)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.Text = def.label
+    btn.BorderSizePixel = 0
+    btn.Active = true
+    btn.Parent = btnGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = btnCfg.Locked and Color3.fromRGB(0, 255, 130) or Color3.fromRGB(255, 200, 60)
+    stroke.Transparency = 0.4
+    stroke.Parent = btn
+
+    local dragging, dragStart, startPos, fired = false, nil, nil, false
+
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+        and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if input.UserInputState and input.UserInputState ~= Enum.UserInputState.Begin then return end
+        if btnCfg.Locked then
+            if mobEnabled then dive(def.side, def.band) end
+            fired = true
+            return
+        end
+        dragging = true
+        dragStart = input.Position
+        startPos = btn.Position
+        fired = false
+    end)
+
+    btn.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
+            local d = input.Position - dragStart
+            btn.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end
+    end)
+
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+        and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if dragging then
+            dragging = false
+            btnPos[def.id] = btn.Position
+            saveLayout()
+            if (input.Position - (dragStart or input.Position)).Magnitude < 6 and not fired then
+                if mobEnabled then dive(def.side, def.band) end
+            end
+        end
+        fired = false
+    end)
+
+    btnRefs[def.id] = { btn = btn, corner = corner, stroke = stroke, def = def }
+end
+
+MobTab:CreateSection("Mobile Buttons")
+MobTab:CreateToggle({
+    Name = "Show Mobile Dive Buttons", CurrentValue = false, Flag = "MobShow",
+    Callback = function(v)
+        btnCfg.Visible = v
+        mobEnabled = v
+        btnGui.Enabled = v
+        if not v then releaseAll() end
+    end,
+})
+MobTab:CreateToggle({
+    Name = "Lock Buttons (tap = dive, no drag)",
+    CurrentValue = btnCfg.Locked, Flag = "MobLocked",
+    Callback = function(v)
+        btnCfg.Locked = v
+        syncLock()
+        saveLayout()
+    end,
+})
+MobTab:CreateSlider({
+    Name = "All Buttons Size", Range = {30, 140}, Increment = 2, Suffix = " px",
+    CurrentValue = btnCfg.Size, Flag = "MobSizeAll",
+    Callback = function(v)
+        btnCfg.Size = v
+        for id in pairs(btnRefs) do btnSizes[id] = v end
+        syncSizes()
+        saveLayout()
+    end,
+})
+MobTab:CreateSlider({
+    Name = "Button Opacity", Range = {0.1, 1}, Increment = 0.05, Suffix = "",
+    CurrentValue = btnCfg.Opacity, Flag = "MobOpacity",
+    Callback = function(v)
+        btnCfg.Opacity = v
+        syncOpacity()
+        saveLayout()
+    end,
+})
+
+MobTab:CreateSection("Individual Size")
+for _, def in ipairs(BTN_DEFS) do
+    MobTab:CreateSlider({
+        Name = "Size " .. def.label:gsub("\n", " ") .. " (" .. def.id .. ")",
+        Range = {20, 160}, Increment = 2, Suffix = " px",
+        CurrentValue = btnSizes[def.id] or btnCfg.Size, Flag = "MobSize_" .. def.id,
+        Callback = function(v)
+            btnSizes[def.id] = v
+            if btnRefs[def.id] then
+                btnRefs[def.id].btn.Size = UDim2.new(0, v, 0, v)
+            end
+            saveLayout()
+        end,
+    })
+end
+
+local SLOT_BAND = {
+    LowLeft = { band = "LOW", side = -1 },
+    LowCentre = { band = "LOW", side = 0 },
+    LowRight = { band = "LOW", side = 1 },
+    MidLeft = { band = "MID", side = -1 },
+    MidCentre = { band = "MID", side = 0 },
+    MidRight = { band = "MID", side = 1 },
+    SupLeft = { band = "SUPER", side = -1 },
+    SupCentre = { band = "SUPER", side = 0 },
+    SupRight = { band = "SUPER", side = 1 },
+}
+
+UIS.InputBegan:Connect(function(input, gp)
+    if gp or input.UserInputType ~= Enum.UserInputType.Keyboard or not pcEnabled then return end
+    for slot, kc in pairs(PCKeys) do
+        if kc == input.KeyCode and not pcHeld[slot] then
+            pcHeld[slot] = true
+            local info = SLOT_BAND[slot]
+            if info then dive(info.side, info.band) end
+            break
+        end
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    for slot, kc in pairs(PCKeys) do
+        if kc == input.KeyCode then pcHeld[slot] = false end
+    end
+end)
+
+PCTab:CreateSection("Enable")
+PCTab:CreateToggle({
+    Name = "Enable PC Keybind Dives", CurrentValue = false, Flag = "PCEnable",
+    Callback = function(v) pcEnabled = v end,
+})
+
+PCTab:CreateSection("Bind Low")
+PCTab:CreateKeybind({ Name = "Low LEFT",   CurrentKeybind = keyName(PCKeys.LowLeft),   Flag = "PCKey_LowLeft",   Callback = function(k) PCKeys.LowLeft   = nameKey(k) or PCKeys.LowLeft   saveLayout() end })
+PCTab:CreateKeybind({ Name = "Low CENTRE", CurrentKeybind = keyName(PCKeys.LowCentre), Flag = "PCKey_LowCentre", Callback = function(k) PCKeys.LowCentre = nameKey(k) or PCKeys.LowCentre saveLayout() end })
+PCTab:CreateKeybind({ Name = "Low RIGHT",  CurrentKeybind = keyName(PCKeys.LowRight),  Flag = "PCKey_LowRight",  Callback = function(k) PCKeys.LowRight  = nameKey(k) or PCKeys.LowRight  saveLayout() end })
+
+PCTab:CreateSection("Bind Mid")
+PCTab:CreateKeybind({ Name = "Mid LEFT",   CurrentKeybind = keyName(PCKeys.MidLeft),   Flag = "PCKey_MidLeft",   Callback = function(k) PCKeys.MidLeft   = nameKey(k) or PCKeys.MidLeft   saveLayout() end })
+PCTab:CreateKeybind({ Name = "Mid CENTRE", CurrentKeybind = keyName(PCKeys.MidCentre), Flag = "PCKey_MidCentre", Callback = function(k) PCKeys.MidCentre = nameKey(k) or PCKeys.MidCentre saveLayout() end })
+PCTab:CreateKeybind({ Name = "Mid RIGHT",  CurrentKeybind = keyName(PCKeys.MidRight),  Flag = "PCKey_MidRight",  Callback = function(k) PCKeys.MidRight  = nameKey(k) or PCKeys.MidRight  saveLayout() end })
+
+PCTab:CreateSection("Bind Super")
+PCTab:CreateKeybind({ Name = "Super LEFT",   CurrentKeybind = keyName(PCKeys.SupLeft),   Flag = "PCKey_SupLeft",   Callback = function(k) PCKeys.SupLeft   = nameKey(k) or PCKeys.SupLeft   saveLayout() end })
+PCTab:CreateKeybind({ Name = "Super CENTRE", CurrentKeybind = keyName(PCKeys.SupCentre), Flag = "PCKey_SupCentre", Callback = function(k) PCKeys.SupCentre = nameKey(k) or PCKeys.SupCentre saveLayout() end })
+PCTab:CreateKeybind({ Name = "Super RIGHT",  CurrentKeybind = keyName(PCKeys.SupRight),  Flag = "PCKey_SupRight",  Callback = function(k) PCKeys.SupRight  = nameKey(k) or PCKeys.SupRight  saveLayout() end })
+
+PCTab:CreateSection("Utility")
+PCTab:CreateToggle({
+    Name = "Double Tap Dive", CurrentValue = true, Flag = "DoubleTap",
+    Callback = function(v) CFG.DoubleTap = v end,
+})
+PCTab:CreateSlider({
+    Name = "Jump Hold", Range = {0.02, 0.20}, Increment = 0.01, Suffix = "s",
+    CurrentValue = CFG.JumpHold, Flag = "JumpHold",
+    Callback = function(v) CFG.JumpHold = v end,
+})
+PCTab:CreateSlider({
+    Name = "Jump Lead", Range = {0.02, 0.30}, Increment = 0.01, Suffix = "s",
+    CurrentValue = CFG.JumpLead, Flag = "JumpLead",
+    Callback = function(v) CFG.JumpLead = v end,
+})
+PCTab:CreateSlider({
+    Name = "Hold After Dive", Range = {0, 1}, Increment = 0.02, Suffix = "s",
+    CurrentValue = CFG.HoldAfter, Flag = "HoldAfter",
+    Callback = function(v) CFG.HoldAfter = v end,
+})
+PCTab:CreateSlider({
+    Name = "Catch Anchor Time", Range = {0, 1}, Increment = 0.05, Suffix = "s",
+    CurrentValue = CFG.CatchAnchorTime, Flag = "CatchAnchorTime",
+    Callback = function(v) CFG.CatchAnchorTime = v end,
+})
+PCTab:CreateButton({
+    Name = "Release All Keys",
+    Callback = function() releaseAll() end,
+})
+
+local customURL = "https://Custom-Controls1.github.io/-"
+local customLoaded = false
+
+local function showPopup(title, body, color)
+    local pg = lp:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local ex = pg:FindFirstChild("OutlawPopup")
+    if ex then ex:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "OutlawPopup"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 999999
+    gui.Parent = pg
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 560, 0, 200)
+    frame.Position = UDim2.new(0.5, -280, 0.4, -100)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    frame.BorderSizePixel = 0
+    frame.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color or Color3.fromRGB(255, 80, 80)
+    stroke.Thickness = 1.5
+    stroke.Parent = frame
+
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -20, 0, 28)
+    titleLbl.Position = UDim2.new(0, 10, 0, 8)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.TextColor3 = color or Color3.fromRGB(255, 120, 120)
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextSize = 16
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Text = title
+    titleLbl.Parent = frame
+
+    local bodyLbl = Instance.new("TextLabel")
+    bodyLbl.Size = UDim2.new(1, -20, 1, -50)
+    bodyLbl.Position = UDim2.new(0, 10, 0, 40)
+    bodyLbl.BackgroundTransparency = 1
+    bodyLbl.TextColor3 = Color3.fromRGB(230, 230, 230)
+    bodyLbl.Font = Enum.Font.Code
+    bodyLbl.TextSize = 13
+    bodyLbl.TextWrapped = true
+    bodyLbl.TextXAlignment = Enum.TextXAlignment.Left
+    bodyLbl.TextYAlignment = Enum.TextYAlignment.Top
+    bodyLbl.Text = body
+    bodyLbl.Parent = frame
+
+    task.delay(POPUP_LIFE, function()
+        if gui then gui:Destroy() end
+    end)
+end
+
+local function probe(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if not ok then return false, "HttpGet failed: " .. tostring(res) end
+    if type(res) ~= "string" then return false, "HttpGet returned " .. typeof(res) end
+    if #res == 0 then return false, "empty body" end
+    local head = res:sub(1, 200):lower()
+    if head:find("<!doctype") or head:find("<html") or head:find("<head") then
+        return false, "URL returned HTML not Lua:\n\n" .. res:sub(1, 200)
+    end
+    return true, res
+end
+
+local function loadCustom()
+    if customLoaded then return true end
+    local ok, body = probe(customURL)
+    if not ok then
+        warn("[Outlaw] custom controls: " .. body)
+        showPopup("Custom Controls: fetch failed", body)
+        return false
+    end
+
+    local ls = loadstring or load
+    if type(ls) ~= "function" then
+        showPopup("Custom Controls: execute failed", "no loadstring/load")
+        return false
+    end
+
+    local fn, perr = ls(body)
+    if not fn then
+        local msg = "compile error from " .. customURL .. ":\n\n" .. tostring(perr)
+        warn("[Outlaw] custom controls: " .. msg)
+        showPopup("Custom Controls: execute failed", msg)
+        return false
+    end
+
+    local ran, rerr = pcall(fn)
+    if not ran then
+        local msg = "runtime error from " .. customURL .. ":\n\n" .. tostring(rerr)
+        warn("[Outlaw] custom controls: " .. msg)
+        showPopup("Custom Controls: execute failed", msg)
+        return false
+    end
+
+    customLoaded = true
+    return true
+end
+
+MiscTab:CreateSection("Custom Controls")
+MiscTab:CreateButton({
+    Name = "Load Custom Controls",
+    Callback = function()
+        if loadCustom() then
+            showPopup("Custom Controls", "Loaded successfully.", Color3.fromRGB(0, 255, 130))
+        end
+    end,
+})
+MiscTab:CreateButton({
+    Name = "Diagnose Custom Controls URL",
+    Callback = function()
+        local lines = {
+            "loadstring: " .. tostring(type(loadstring)),
+            "load: " .. tostring(type(load)),
+            "URL: " .. customURL,
+        }
+        local ok, res = pcall(function() return game:HttpGet(customURL) end)
+        if not ok then
+            lines[#lines + 1] = "HttpGet error: " .. tostring(res)
+        elseif type(res) ~= "string" then
+            lines[#lines + 1] = "HttpGet returned: " .. typeof(res)
+        else
+            lines[#lines + 1] = "body length: " .. #res
+            lines[#lines + 1] = "first 120 chars:"
+            lines[#lines + 1] = res:sub(1, 120)
+        end
+        local text = table.concat(lines, "\n")
+        print("[Outlaw] DIAGNOSE:\n" .. text)
+        showPopup("Custom Controls Diagnose", text)
+    end,
+})
+MiscTab:CreateInput({
+    Name = "Custom Controls URL", PlaceholderText = "https://...",
+    CurrentValue = customURL,
+    Callback = function(v)
+        if v and v ~= "" then
+            customURL = v
+            customLoaded = false
+        end
+    end,
+})
+
+Window:LoadConfig()
